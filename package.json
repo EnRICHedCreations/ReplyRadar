@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
-    "build": "node scripts/build.mjs",
+    "build": "next build",
     "start": "node --env-file-if-exists=.env.local scripts/start.mjs",
     "worker": "node --import tsx --env-file-if-exists=.env.local worker/index.ts",
     "typecheck": "tsc --noEmit",
