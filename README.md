@@ -37,7 +37,7 @@ Use a dedicated ReplyRadar project. Run `npm run db:migrate` once with its datab
 
 Tables: profiles, subscriptions, radars, posts, matches, scan_runs, integrations, radar_integrations, notification_deliveries, usage_events, muted_authors, scan_jobs, telegram_links, stripe_events, worker_heartbeats. The migration runner records applied filenames in replyradar_migrations.
 
-Get `DATABASE_URL` from Supabase **Connect → Session pooler**. URL-encode the database password. Use the supplied TLS settings; certificate verification is never disabled. Optional `DATABASE_CA_CERT` accepts a trusted CA PEM. The runtime needs a trusted server database role with table access; the Supabase postgres role works. Keep it exclusively in server environments.
+Get `DATABASE_URL` from Supabase **Connect → Session pooler**. URL-encode the database password. Use the supplied TLS settings; certificate verification is never disabled. Optional `DATABASE_CA_CERT` accepts a trusted CA PEM. The startup migration and runtime need a trusted server database role with schema/table access; the Supabase postgres role works. Keep it exclusively in server environments.
 
 Set Supabase Auth Site URL to your web URL and add `<APP_URL>/auth/callback` to allowed redirect URLs. Enable email/password and email confirmations. Configure production SMTP in Supabase separately from Resend match-alert delivery. The publishable key is preferred; the legacy anon key is supported as a fallback. `SUPABASE_SERVICE_ROLE_KEY` is not needed by this architecture.
 
@@ -85,7 +85,9 @@ Enable Customer Portal with plan switching and cancellation and add all supporte
 
 ## Deployment with Deploy Hatch
 
-Deploy the same repository (`EnRICHedCreations/ReplyRadar`, branch `main`) as two services:
+The default `npm start` supervises web and worker as separate Node processes in the existing ReplyRadar project. When DATABASE_URL is present it applies pending migrations under a database lock, then starts the worker on internal port 3001. Missing database configuration is explicit in logs and `/api/health`. The worker receives bounded crash restarts and never depends on browser activity. Use 1 GB memory for this combined deployment.
+
+For independent scaling, deploy the same repository (`EnRICHedCreations/ReplyRadar`, branch `main`) as two services:
 
 | Setting      | ReplyRadar web  | ReplyRadar worker   |
 | ------------ | --------------- | ------------------- |
@@ -93,10 +95,10 @@ Deploy the same repository (`EnRICHedCreations/ReplyRadar`, branch `main`) as tw
 | Service type | web             | worker              |
 | Install      | `npm ci`        | `npm ci`            |
 | Build        | `npm run build` | `npm run typecheck` |
-| Start        | `npm start`     | `npm run worker`    |
+| Start        | `npm run start:web` | `npm run worker`    |
 | Memory       | 512 MB minimum  | 512 MB minimum      |
 
-Do not run migrations in the build step. Apply them explicitly once before enabling users. Supply the environment values before the production build so Next.js public variables are compiled correctly. Redeploy after changing public auth values. Supply database, encryption and notification credentials to the worker too.
+Do not run migrations in the build step. Combined startup applies them automatically; for split services, apply them explicitly once before enabling users. Supply the environment values before the production build so Next.js public variables are compiled correctly. Redeploy after changing public auth values. Supply database, encryption and notification credentials to the worker too.
 
 `/api/health` returns 200 only when database/schema, Redis and worker heartbeat are healthy. It returns 503 with `setup_required` when dependencies are missing. The landing page can be served before configuration, but this does **not** mean the application is operational. Auth pages clearly explain missing Supabase setup.
 

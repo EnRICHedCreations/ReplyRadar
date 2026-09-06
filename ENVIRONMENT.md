@@ -51,9 +51,9 @@ Configure Stripe Customer Portal for plan changes/cancellation. Paid access is w
 
 ## After entering values
 
-1. Run `npm run db:migrate` against the selected Supabase database.
+1. Set DATABASE_URL for the selected Supabase project. Combined startup runs migrations automatically; split services require `npm run db:migrate`.
 2. Configure Supabase Site URL and `/auth/callback` redirect allowlist, email confirmation, and production SMTP.
-3. Deploy/redeploy web and worker from the same revision.
+3. Redeploy ReplyRadar: the default start command supervises web and worker. Alternatively deploy them independently from the same revision.
 4. Check `/api/health`: all three checks must be true.
 5. Create and confirm an account, activate a mock radar, inspect its matches and history, connect a channel, and test delivery.
 6. Test Stripe checkout and cancellation with test keys before switching to live keys.

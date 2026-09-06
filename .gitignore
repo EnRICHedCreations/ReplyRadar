@@ -4,3 +4,6 @@ node_modules/
 !.env.example
 *.tsbuildinfo
 coverage/
+supabase/.temp/
+test-results/
+playwright-report/

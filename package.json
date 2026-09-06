@@ -6,21 +6,21 @@
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
     "build": "next build",
-    "start": "next start --hostname 0.0.0.0",
+    "start": "node --env-file-if-exists=.env.local scripts/start.mjs",
     "worker": "node --import tsx --env-file-if-exists=.env.local worker/index.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "test": "node --import tsx --test tests/*.test.ts",
     "db:migrate": "node --import tsx --env-file-if-exists=.env.local scripts/migrate.ts",
     "ops": "node --import tsx --env-file-if-exists=.env.local scripts/ops.ts",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "start:web": "next start --hostname 0.0.0.0"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@hookform/resolvers": "5.9.1",
     "@supabase/ssr": "0.12.6",
     "@supabase/supabase-js": "2.115.0",
     "ioredis": "6.0.0",
@@ -31,6 +31,7 @@
     "react-dom": "19.2.8",
     "react-hook-form": "7.87.0",
     "stripe": "22.6.1",
+    "tsx": "4.23.13",
     "zod": "4.5.4"
   },
   "devDependencies": {
@@ -44,9 +45,7 @@
     "eslint": "9.39.5",
     "eslint-config-next": "16.3.4",
     "prettier": "3.9.6",
-    "supabase": "2.116.0",
     "tailwindcss": "4.3.3",
-    "tsx": "4.23.13",
     "typescript": "6.0.3"
   },
   "private": true,
