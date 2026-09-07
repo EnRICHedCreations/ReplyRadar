@@ -1,4 +1,2 @@
-import { Account } from "@/components/app-ui";
-export default function Page() {
-  return <Account />;
-}
+import ProfileSettings from "@/components/profile-settings";
+export default function Page(){return <ProfileSettings title="Account"/>;}
