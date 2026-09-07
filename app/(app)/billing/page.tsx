@@ -1,4 +1,2 @@
-import { Billing } from "@/components/app-ui";
-export default function Page() {
-  return <Billing />;
-}
+import CreditsBilling from "@/components/credits-billing";
+export default function Page(){return <CreditsBilling />;}
