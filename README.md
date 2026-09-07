@@ -1,131 +1,217 @@
 # ReplyRadar
 
-Find the conversations worth joining. Next.js application with Supabase Auth/PostgreSQL, a standalone Node worker, deterministic mock/official X providers, scored matches, Telegram/Discord/Resend notifications, and Stripe subscriptions.
+ReplyRadar monitors X for high-signal conversations worth joining. It is a Next.js application backed by Supabase/PostgreSQL, Redis rate limiting, a standalone Node worker, official X Recent Search, in-app notifications, and prepaid Stripe usage credits.
 
-## Quick start
+ReplyRadar does **not** send automated replies. It surfaces conversations; the user opens X and writes the reply.
 
-Node 22+ (24 recommended).
+## Current product model
 
-```sh
-npm ci
-cp .env.example .env.local
-# Fill Supabase auth values, DATABASE_URL and REDIS_URL.
-# Generate INTEGRATION_ENCRYPTION_KEY using: openssl rand -hex 32
-npm run db:migrate
-npm run dev
-# Separate terminal:
-npm run worker
-```
+- No monthly subscription plans.
+- No Telegram, Discord, or email delivery.
+- Notifications live inside ReplyRadar.
+- Users buy prepaid $10, $25, $50, or $100 credit packs through Stripe Checkout.
+- Every successful X scan debits usage credits.
+- Monitoring pauses automatically when the balance is too low.
+- Every radar has a 10–100 result ceiling per scan.
+- Production defaults are capped at 25 results per scan.
+- The worker performs at most **one X Recent Search request per scan**.
+- Scans are never more frequent than every 10 minutes.
 
-The web process loads `.env.local` through Next.js. Worker and operator commands load it through Node. In production, use environment variables managed by the host. Do not commit `.env.local`.
-
-`SOCIAL_PROVIDER=mock` requires no X credentials. It does not replace Supabase or Redis: accounts, matches, queues and quota remain real. The landing-page walkthrough is explicitly illustrative. There is no anonymous dashboard or development authentication bypass.
+The initial customer charge model is based on the measured X cost of roughly half a cent per returned post and applies a 2× markup. Cost assumptions should be revisited as more real production data is collected.
 
 ## Architecture
 
-- **Web:** Next.js App Router, React, TypeScript, Tailwind, Lucide, React Hook Form, Zod. Public marketing/auth routes; session-protected application routes; same-origin authenticated mutations.
-- **Auth:** Supabase SSR cookies, verified `getUser()` identity on every API call. Proxy refreshes sessions. Email confirmation and recovery use PKCE.
-- **Database:** Supabase PostgreSQL. Direct server `pg` pool handles transactional operations. The browser never receives database credentials. Data API tables are read-only under tenant RLS; integration credentials and internal jobs have no browser grants.
-- **Durable queue:** PostgreSQL `scan_jobs` and `notification_deliveries`, an equivalent durable queue instead of BullMQ. Match insertion and delivery-outbox insertion share a transaction. Redis provides atomic API rate limits.
-- **Worker:** independent Node process. Scheduler, scanning and notification delivery run without any browser session. Account advisory transaction locks and radar/job row locks serialize scanning and quota changes. Jobs survive worker restarts. Plan downgrades allow only the oldest N enabled radars to scan.
-- **Providers:** normalized `SocialSearchProvider`; official X Recent Search with since_id and pagination; deterministic mock provider. X does not require a logged-in user browser. Query validation errors appear in history.
-- **Billing:** signed Stripe webhooks fetch current subscription state under an account lock and maintain an event ledger. Redirects grant nothing. Upgrade/downgrade/cancel through Checkout and Customer Portal.
+### Web
 
-## Supabase setup
+Next.js App Router + React + TypeScript.
 
-Use a dedicated ReplyRadar project. Run `npm run db:migrate` once with its database connection string. The migration was created using the Supabase CLI and is under `supabase/migrations/`.
+Responsibilities:
+- marketing and authentication
+- radar creation/editing
+- matches and in-app notifications
+- prepaid credit balance and ledger
+- Stripe one-time credit purchases
+- customer-safe scan history
+- Redis-backed mutation/rate limits
 
-Tables: profiles, subscriptions, radars, posts, matches, scan_runs, integrations, radar_integrations, notification_deliveries, usage_events, muted_authors, scan_jobs, telegram_links, stripe_events, worker_heartbeats. The migration runner records applied filenames in replyradar_migrations.
+### Worker
 
-Get `DATABASE_URL` from Supabase **Connect → Session pooler**. URL-encode the database password. Use the supplied TLS settings; certificate verification is never disabled. Optional `DATABASE_CA_CERT` accepts a trusted CA PEM. The startup migration and runtime need a trusted server database role with schema/table access; the Supabase postgres role works. Keep it exclusively in server environments.
+Production worker repository: `EnRICHedCreations/replyradar-worker`.
 
-Set Supabase Auth Site URL to your web URL and add `<APP_URL>/auth/callback` to allowed redirect URLs. Enable email/password and email confirmations. Configure production SMTP in Supabase separately from Resend match-alert delivery. The publishable key is preferred; the legacy anon key is supported as a fallback. `SUPABASE_SERVICE_ROLE_KEY` is not needed by this architecture.
+Responsibilities:
+- schedule due radars
+- enforce account credit balance before requesting X
+- cap each scan to one X Recent Search request
+- retrieve up to the radar result ceiling
+- score posts
+- discard results below the radar score threshold and `GENERAL_DISCUSSION`
+- create qualified matches
+- debit the credit ledger atomically
+- maintain worker heartbeat
 
-## Redis
+### Database
 
-Supply `REDIS_URL` (`rediss://` for a hosted TLS Redis). Redis is required for mutations and auth rate limiting and fails closed if unavailable. For local Redis: `docker run --rm -p 6379:6379 redis:7-alpine`; use `redis://localhost:6379`. For production enable persistence and authentication on your Redis service.
+Supabase PostgreSQL stores:
+- profiles
+- radars
+- posts
+- matches
+- scan runs
+- scan jobs
+- worker heartbeats
+- usage events
+- Stripe event ledger
+- prepaid credit accounts
+- prepaid credit ledger
 
-## X and mock mode
+Legacy subscription/integration tables may still exist in databases upgraded from earlier builds, but production user flows no longer depend on them. Legacy subscription and external-integration API endpoints return `410 Gone`.
 
-Use `SOCIAL_PROVIDER=x` and `X_BEARER_TOKEN` from your X developer account with Recent Search permission. Existing radar provider choices are persisted; to switch existing mock radars, run an operator-controlled database update setting `provider='x', provider_cursor=null, next_scan_at=now()` after configuring credentials. Never mix mock cursors with X IDs.
+Credit tables are server-only: RLS is enabled and Data API grants are revoked for `anon` and `authenticated` roles.
 
-Mock queries support `[empty]`, `[error]`, and `[rate-limit]` to simulate zero results, failures and 429s. Otherwise three realistic posts are produced per minute bucket, including overlap with prior scans. Mock X links open the query on X; they never pretend to be real posts by example authors.
+## X cost controls
 
-X pagination is bounded to 10 pages per scan. If more pages remain, the scan fails with `X_QUERY_TOO_BROAD` without advancing the cursor. Narrow the query. Initial searches use the Recent Search window. Provider errors retry no sooner than the plan interval and upstream reset time. Non-retryable failures defer for an hour for operator intervention.
+The X provider uses the official Recent Search endpoint.
 
-## Notifications
+Each scan:
+1. locks the account/radar work item
+2. reads the customer credit balance
+3. reduces the requested result cap if the balance cannot safely cover the configured ceiling
+4. refuses to scan if fewer than 10 paid results can be safely covered
+5. performs one X request
+6. scores returned posts
+7. stores only qualified matches
+8. debits the actual returned-post charge
+9. records billable posts and customer cost on `scan_runs`
 
-Each radar selects its integrations in the editor. Connect channels before selecting them, or edit a radar after connecting. Email supports instant and high-opportunity-only (80+) modes. Radar minimum score applies to all its alerts. Discord is enforced for Growth.
+The production customer UI never receives raw X response bodies, request IDs, credentials, or operator billing diagnostics. Internal provider details are stored in `scan_runs.error_message`; the specific customer history route exposes sanitized status only.
 
-All sensitive destinations are AES-256-GCM encrypted with `INTEGRATION_ENCRYPTION_KEY`. Generate one 32-byte key, expressed as 64 hexadecimal characters, and use the same key on web and worker. Back it up securely: replacing it without re-encrypting stored destinations requires reconnecting integrations.
+## In-app notifications
 
-### Telegram
+A qualifying match is the notification source of truth. `matches.read_at` tracks unread state.
 
-Create an operator-owned bot with BotFather. Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_BOT_USERNAME` (without @), and a generated `TELEGRAM_WEBHOOK_SECRET`. Register `<APP_URL>/api/telegram/webhook` using Telegram `setWebhook` with that exact `secret_token` and `allowed_updates=["message"]`. The setup values belong to the operator; end users never paste bot tokens.
+The UI provides:
+- notification bell + unread count
+- recent notifications
+- dedicated notifications page
+- mark one read
+- mark all read
+- direct Open on X action
 
-Users connect through a one-time 10-minute deep-link token. Only private chats are accepted. The webhook consumes the hashed token atomically and queues a confirmation. Open Integrations afterward and select Telegram in the radar editor.
+No external notification credential is required.
 
-### Discord
+## Stripe prepaid credits
 
-Create a webhook in Discord channel settings. Paste the complete `https://discord.com/api/webhooks/...` URL into Integrations. Only exact discord.com HTTPS webhook paths are accepted; credentials, alternate hosts, ports, query strings and redirects are rejected. Mentions are disabled in deliveries.
+Required web environment variables:
 
-### Email
-
-Set `RESEND_API_KEY` and a verified `EMAIL_FROM` sender. Destinations are restricted to the authenticated user's confirmed email address. Resend receives a stable delivery ID as its idempotency key.
-
-### Delivery semantics
-
-Database uniqueness prevents duplicate match/integration jobs. Only acknowledged deliveries become `sent`. HTTP 429 responses retry with exponential backoff (maximum five attempts). Ambiguous network timeouts or process crashes after sending become `uncertain` and are **not automatically retried**. Telegram/Discord do not offer a general exactly-once delivery guarantee; claiming one would be incorrect. Investigate uncertain messages before manually deciding to retry. Definite non-rate-limit failures require operator action. Notification failure does not roll back a scan.
-
-## Billing
-
-Create monthly Stripe prices: Starter $19, Pro $49, Growth $99, then set `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO`, `STRIPE_PRICE_GROWTH`. Set `STRIPE_SECRET_KEY`. Register `<APP_URL>/api/stripe/webhook` for `customer.subscription.created`, `.updated`, and `.deleted`; set its signing secret as `STRIPE_WEBHOOK_SECRET`.
-
-Enable Customer Portal with plan switching and cancellation and add all supported products/prices. Test with Stripe test keys first. The webhook API resource is retrieved from Stripe to avoid older events resurrecting stale access. Unrecognized prices grant free entitlements. Monthly scan quota uses calendar months in UTC, independently from Stripe billing-anniversary dates.
-
-## Deployment with Deploy Hatch
-
-The default `npm start` supervises web and worker as separate Node processes in the existing ReplyRadar project. When DATABASE_URL is present it applies pending migrations under a database lock, then starts the worker on internal port 3001. Missing database configuration is explicit in logs and `/api/health`. The worker receives bounded crash restarts and never depends on browser activity. Use 1 GB memory for this combined deployment.
-
-For independent scaling, deploy the same repository (`EnRICHedCreations/ReplyRadar`, branch `main`) as two services:
-
-| Setting      | ReplyRadar web  | ReplyRadar worker   |
-| ------------ | --------------- | ------------------- |
-| Runtime      | Node.js 24      | Node.js 24          |
-| Service type | web             | worker              |
-| Install      | `npm ci`        | `npm ci`            |
-| Build        | `npm run build` | `npm run typecheck` |
-| Start        | `npm run start:web` | `npm run worker`    |
-| Memory       | 512 MB minimum  | 512 MB minimum      |
-
-Do not run migrations in the build step. Combined startup applies them automatically; for split services, apply them explicitly once before enabling users. Supply the environment values before the production build so Next.js public variables are compiled correctly. Redeploy after changing public auth values. Supply database, encryption and notification credentials to the worker too.
-
-`/api/health` returns 200 only when database/schema, Redis and worker heartbeat are healthy. It returns 503 with `setup_required` when dependencies are missing. The landing page can be served before configuration, but this does **not** mean the application is operational. Auth pages clearly explain missing Supabase setup.
-
-Worker exposes a separate HTTP health check on `PORT` (default 3001) and records a database heartbeat every 15 seconds. `npm run ops` is an operator-only CLI for users, plans, queue depth, failures and activity; database credentials are its authorization boundary. There is no hidden admin web route.
-
-## Validation
-
-```sh
-npm test
-npm run typecheck
-npm run lint
-npm run build
+```env
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
 ```
 
-Tests execute real PostgreSQL semantics using PGlite, with only network providers and the pg connection adapter stubbed. They cover schema application, RLS, scan → match → delivery, deduplication, quota exhaustion, pause/schedules/DST, provider failure/cursor preservation, rate-limit retries, uncertain delivery behavior, encryption/SSRF protection, scoring, normalization, Stripe signatures, duplicate events and state reconciliation.
+No Stripe Price IDs are required. Checkout uses one-time `price_data` for fixed packs.
 
-PGlite is a single-session database. These tests do not prove multi-process lock contention or managed Supabase Auth. `npm run test:e2e` is the browser test suite; use an isolated configured environment and the test values in `.env.example`. Full signup/confirmation/real integrations require live credentials. Never claim those flows passed based only on unit tests.
+Webhook endpoint:
 
-## Operational boundaries
+```text
+/api/stripe/webhook
+```
 
-- AI is optional in the brief; query generation uses deterministic editable templates. No AI API key is needed.
-- Email digests, arbitrary outgoing webhooks and Google OAuth are not implemented. The brief allows instant/high-only email and optional OAuth. The initial Growth plan offers Discord; arbitrary URLs are deliberately not exposed as webhook destinations.
-- One worker executes scans sequentially; deploy additional workers for volume. Account locks serialize one account's scans. Load-test provider budgets and database connection limits before increasing scale.
-- A scan holds a database transaction during the bounded provider request. A process crash rolls back that attempt, so an upstream request already made may not be reflected in local usage. No cursor or matches are partially committed.
-- No automated replies, impersonation or X scraping.
-- Production signup, payment collection, external notifications and multi-process concurrency must be validated after credentials are configured. Live X data is not verified by mock tests.
+At minimum configure Stripe to send `checkout.session.completed`.
 
-## References
+The signed webhook is the authority that adds credits. Returning to `/billing?credits=added` does not grant credit by itself.
 
-[Supabase SSR](https://supabase.com/docs/guides/auth/server-side/creating-a-client), [Supabase RLS](https://supabase.com/docs/guides/database/postgres/row-level-security), [X Recent Search](https://docs.x.com/x-api/posts/search-recent-posts), [Stripe webhooks](https://docs.stripe.com/webhooks), [Telegram Bot API](https://core.telegram.org/bots/api), [Resend API](https://resend.com/docs/api-reference/emails/send-email).
+Credit mutations are stored in `credit_ledger` with a Stripe session uniqueness constraint and a separate `stripe_events` idempotency ledger.
+
+## Production environment
+
+See `ENVIRONMENT.md` for the full current environment list.
+
+### Web
+
+```env
+NEXT_PUBLIC_APP_URL=https://replyradar.com
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+DATABASE_URL=
+REDIS_URL=
+SOCIAL_PROVIDER=x
+X_BEARER_TOKEN=
+STRIPE_SECRET_KEY=
+STRIPE_WEBHOOK_SECRET=
+```
+
+`X_BEARER_TOKEN` is primarily required by the worker; it can be omitted from the web service if no web-side provider code uses it.
+
+### Worker
+
+```env
+DATABASE_URL=
+SOCIAL_PROVIDER=x
+X_BEARER_TOKEN=
+PORT=3001
+```
+
+Do not add the removed Telegram, Discord, Resend, integration-encryption, or subscription-price environment variables.
+
+## Deploy Hatch
+
+### ReplyRadar web
+
+Repository: `EnRICHedCreations/ReplyRadar`
+
+Recommended configuration:
+- Runtime: Node.js 24
+- Service type: web
+- Install: `npm install`
+- Build: `npm run build`
+- Start: `npm start`
+- Memory: 2 GB
+- CPU: 1
+
+### ReplyRadar worker
+
+Repository: `EnRICHedCreations/replyradar-worker`
+
+Recommended configuration:
+- Runtime: Node.js 24
+- Service type: worker
+- Install: `npm install`
+- Build: none required
+- Start: `npm run start`
+
+## Database migrations
+
+Apply all migrations under `supabase/migrations` to the ReplyRadar Supabase project.
+
+Important later migrations include:
+- in-app notification read state
+- prepaid credit accounts/ledger
+- per-scan billable post + cost fields
+- per-radar result ceiling
+- server-only security for credit tables
+- safer 25-result production default
+
+## Production smoke test
+
+1. Confirm the worker is healthy and updating `worker_heartbeats`.
+2. Confirm `/api/health` reports database, Redis, and worker healthy.
+3. Sign in and open Credits.
+4. In Stripe test mode, purchase the $10 pack.
+5. Verify the signed webhook creates one positive `credit_ledger` entry and increments `credit_accounts.balance_cents` exactly once.
+6. Create a narrow radar with a 10-result cap and a 1-hour interval.
+7. Run a scan.
+8. Verify at most 10 posts are returned/billed.
+9. Verify only posts at or above the radar score threshold become matches.
+10. Verify one negative scan ledger entry is created and the balance decreases.
+11. Verify in-app notifications appear for qualified matches.
+12. Verify scan history shows sanitized customer messages rather than raw X diagnostics.
+13. Reduce the credit balance below the minimum safe request and verify the worker pauses with `CREDITS_REQUIRED` without calling X.
+
+## Operational notes
+
+- Redis is required for authenticated write rate limiting.
+- The worker uses PostgreSQL advisory locks and row locks to serialize per-account scan work.
+- X credentials and raw provider error details must never be returned to normal users.
+- Keep queries narrow. Broad queries cost more because X billing is tied to returned data.
+- Existing legacy subscription/integration tables can be physically removed in a future destructive cleanup after confirming no production data needs to be retained.
+- Real X and Stripe costs should be periodically reconciled against the customer credit ledger before changing retail pricing.
