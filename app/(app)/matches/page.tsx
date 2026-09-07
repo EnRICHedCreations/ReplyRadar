@@ -1,4 +1,2 @@
-import { Matches } from "@/components/app-ui";
-export default function Page() {
-  return <Matches />;
-}
+import MatchesUI from "@/components/matches-ui";
+export default function Page(){return <MatchesUI/>;}
