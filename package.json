@@ -5,7 +5,7 @@
   "main": "index.js",
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0",
-    "build": "next build",
+    "build": "NODE_OPTIONS=--max-old-space-size=1400 next build --webpack",
     "start": "next start --hostname 0.0.0.0",
     "worker": "node --import tsx --env-file-if-exists=.env.local worker/index.ts",
     "typecheck": "tsc --noEmit",
