@@ -1,59 +1,68 @@
-# ReplyRadar environment setup
+# ReplyRadar production environment
 
-Add these in Deploy Hatch's environment settings. Keep secret values there, not in GitHub. Values that belong to your accounts cannot be fabricated.
+ReplyRadar now uses in-app notifications and prepaid usage credits. External Telegram, Discord, and email integrations have been removed. Subscription price IDs are no longer used.
 
-## Minimum for working mock monitoring
+## Web service
 
-| Variable                               | Exact value or where to get it                                                              | Service |
-| -------------------------------------- | ------------------------------------------------------------------------------------------- | ------- |
-| `NEXT_PUBLIC_APP_URL`                  | Your verified ReplyRadar web URL; no trailing slash                                         | Web     |
-| `NEXT_PUBLIC_SUPABASE_URL`             | ReplyRadar Supabase project URL                                                             | Web     |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase project → API keys → publishable key                                               | Web     |
-| `DATABASE_URL`                         | Supabase Connect → Session pooler connection string, with real URL-encoded password and TLS | Both    |
-| `REDIS_URL`                            | Your Redis service connection URL; `rediss://` for TLS                                      | Web     |
-| `SOCIAL_PROVIDER`                      | `mock`                                                                                      | Both    |
-| `INTEGRATION_ENCRYPTION_KEY`           | Generate once: `openssl rand -hex 32`                                                       | Both    |
+| Variable | Value |
+| --- | --- |
+| `NEXT_PUBLIC_APP_URL` | Production ReplyRadar URL, no trailing slash |
+| `NEXT_PUBLIC_SUPABASE_URL` | ReplyRadar Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Supabase publishable key |
+| `DATABASE_URL` | Supabase Connect → Session pooler connection string |
+| `REDIS_URL` | Hosted Redis URL, preferably `rediss://` |
+| `SOCIAL_PROVIDER` | `x` in production |
+| `X_BEARER_TOKEN` | Optional on web; worker is the service that performs X searches |
+| `STRIPE_SECRET_KEY` | Stripe live secret key |
+| `STRIPE_WEBHOOK_SECRET` | Signing secret for `/api/stripe/webhook` |
 
-The older `NEXT_PUBLIC_SUPABASE_ANON_KEY` is an alternative to the publishable key, not an additional requirement. `SUPABASE_SERVICE_ROLE_KEY` is not used. `AI_API_KEY` and `AI_MODEL` are not used because query generation uses templates.
+Do not add `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_CA_CERT`, or old integration variables unless the code explicitly requires them for a future change.
 
-## Enable live X search
+## Worker service
 
-| Variable          | Value                                                  | Service |
-| ----------------- | ------------------------------------------------------ | ------- |
-| `SOCIAL_PROVIDER` | `x`                                                    | Both    |
-| `X_BEARER_TOKEN`  | X developer app bearer token with Recent Search access | Worker  |
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | Same Supabase Session Pooler URL as web |
+| `SOCIAL_PROVIDER` | `x` |
+| `X_BEARER_TOKEN` | X developer app bearer token with Recent Search access |
+| `PORT` | Optional; Deploy Hatch workers do not require public HTTP ingress |
 
-Reset stored cursors when switching existing radars from mock to X; see README.
+The worker performs at most one X Recent Search request per scan. Each radar has a 10–100 result ceiling, production defaults are capped at 25, scanning is never more frequent than every 10 minutes, and scans pause when the prepaid credit balance is too low to safely cover the configured request cap.
 
-## Enable notifications
+## Stripe
 
-| Variable                  | Value                                                                 | Service |
-| ------------------------- | --------------------------------------------------------------------- | ------- |
-| `TELEGRAM_BOT_TOKEN`      | BotFather token                                                       | Both    |
-| `TELEGRAM_BOT_USERNAME`   | Bot username without `@`                                              | Web     |
-| `TELEGRAM_WEBHOOK_SECRET` | Generate: `openssl rand -hex 32`; register as Telegram `secret_token` | Web     |
-| `RESEND_API_KEY`          | Resend API key                                                        | Both    |
-| `EMAIL_FROM`              | Sender address on your verified Resend domain                         | Both    |
+Stripe Checkout uses one-time payments for $10, $25, $50, and $100 credit packs. No Stripe Price IDs are required because Checkout creates one-time `price_data` dynamically.
 
-Discord webhooks are connected by authenticated users in Integrations, encrypted in the database; no global Discord secret is needed.
+Configure the production webhook endpoint:
 
-## Enable Stripe
+`https://YOUR_DOMAIN/api/stripe/webhook`
 
-| Variable                | Value                                    | Service |
-| ----------------------- | ---------------------------------------- | ------- |
-| `STRIPE_SECRET_KEY`     | Stripe secret API key                    | Web     |
-| `STRIPE_WEBHOOK_SECRET` | Signing secret for `/api/stripe/webhook` | Web     |
-| `STRIPE_PRICE_STARTER`  | Monthly $19 price ID                     | Web     |
-| `STRIPE_PRICE_PRO`      | Monthly $49 price ID                     | Web     |
-| `STRIPE_PRICE_GROWTH`   | Monthly $99 price ID                     | Web     |
+At minimum subscribe to `checkout.session.completed`. The webhook is the authority that adds purchased credits to the account ledger; returning from Checkout never grants credits by itself.
 
-Configure Stripe Customer Portal for plan changes/cancellation. Paid access is webhook-controlled.
+## Supabase
 
-## After entering values
+Apply all migrations in `supabase/migrations`. Credit balances and ledgers are server-only: RLS is enabled and Data API access is revoked from `anon` and `authenticated` roles.
 
-1. Set DATABASE_URL for the selected Supabase project. Combined startup runs migrations automatically; split services require `npm run db:migrate`.
-2. Configure Supabase Site URL and `/auth/callback` redirect allowlist, email confirmation, and production SMTP.
-3. Redeploy ReplyRadar: the default start command supervises web and worker. Alternatively deploy them independently from the same revision.
-4. Check `/api/health`: all three checks must be true.
-5. Create and confirm an account, activate a mock radar, inspect its matches and history, connect a channel, and test delivery.
-6. Test Stripe checkout and cancellation with test keys before switching to live keys.
+Configure Supabase Auth Site URL and the `/auth/callback` redirect allowlist for the production domain.
+
+## Deploy Hatch
+
+Web:
+- Install: `npm install`
+- Build: `npm run build`
+- Start: `npm start`
+- Recommended resources: 2 GB RAM, 1 CPU
+
+Worker:
+- Install: `npm install`
+- Start: `npm run start`
+- Service type: worker
+
+## Production smoke test
+
+1. Confirm `/api/health` reports the database, Redis, and worker healthy.
+2. Sign up and confirm an account.
+3. Buy a small test credit pack through Stripe test mode first, then verify the credit ledger increments only after the signed webhook.
+4. Create a radar with a 10-result cap and a narrow query.
+5. Run one scan and confirm the ledger shows a negative scan charge, the balance decreases, and only posts above the radar threshold become matches.
+6. Confirm X/provider details appear only in internal `scan_runs.error_message`; the customer history endpoint must expose only sanitized error codes.
