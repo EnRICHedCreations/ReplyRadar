@@ -1,4 +1,5 @@
-import { Overview } from "@/components/app-ui";
+import OverviewUI from "@/components/overview-ui";
+
 export default function Page() {
-  return <Overview />;
+  return <OverviewUI />;
 }
