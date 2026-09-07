@@ -38,8 +38,6 @@ export async function POST(req: Request, ctx: Context) {
       );
     });
 
-    // Manual scans are interactive. Wait briefly for the worker so the button
-    // can report the actual outcome instead of leaving a stale "queued" banner.
     for (let i = 0; i < 48; i++) {
       await sleep(250);
       const run = (
@@ -56,12 +54,12 @@ export async function POST(req: Request, ctx: Context) {
         const posts = Number(run.results_count || 0);
         const matches = Number(run.new_matches_count || 0);
         const cents = Number(run.cost_cents || 0);
-        const cost = cents === 0 ? "No credits spent." : `$${(cents / 100).toFixed(2)} used.`;
+        const cost = `$${(cents / 100).toFixed(2)} scan charge.`;
         const result = posts === 0
-          ? `Scan complete — no new posts found. ${cost}`
+          ? `Scan complete — X returned 0 posts, no new matches found. ${cost}`
           : matches === 0
-            ? `Scan complete — ${posts} posts checked, no new matches found. ${cost}`
-            : `Scan complete — ${posts} posts checked, ${matches} new ${matches === 1 ? "match" : "matches"} found. ${cost}`;
+            ? `Scan complete — X returned ${posts} posts, no new matches found. ${cost}`
+            : `Scan complete — X returned ${posts} posts, ${matches} new ${matches === 1 ? "match" : "matches"} found. ${cost}`;
         return NextResponse.json({ message: result, completed: true, posts, matches, cost_cents: cents });
       }
       if (run.status === "failed") {
