@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { user, configured } from "@/lib/auth";
+import { isAdminUser } from "@/lib/admin";
 import Shell from "@/components/shell";
 export const dynamic = "force-dynamic";
 export default async function Layout({
@@ -14,5 +15,6 @@ export default async function Layout({
   } catch {
     redirect("/login");
   }
-  return <Shell email={u.email || "Account"}>{children}</Shell>;
+  const admin = await isAdminUser(u.id);
+  return <Shell email={u.email || "Account"} isAdmin={admin}>{children}</Shell>;
 }
