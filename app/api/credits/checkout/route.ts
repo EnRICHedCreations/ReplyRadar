@@ -15,6 +15,8 @@ export async function POST(req: Request) {
   if (!app) return NextResponse.json({ error: "Billing is not configured." }, { status: 503 });
   const session = await stripe().checkout.sessions.create({
     mode: "payment",
+    payment_method_types: ["card"],
+    submit_type: "pay",
     client_reference_id: u.id,
     customer_email: u.email || undefined,
     line_items: [{
