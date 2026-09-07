@@ -1,4 +1,2 @@
-import { RadarForm } from "@/components/app-ui";
-export default function Page() {
-  return <RadarForm />;
-}
+import RadarEditor from "@/components/radar-editor";
+export default function Page(){return <RadarEditor/>;}
