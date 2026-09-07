@@ -1,4 +1,2 @@
-import { Integrations } from "@/components/app-ui";
-export default function Page() {
-  return <Integrations />;
-}
+import { redirect } from "next/navigation";
+export default function Page(){ redirect("/notifications"); }
