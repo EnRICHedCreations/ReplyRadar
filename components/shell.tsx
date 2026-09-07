@@ -1,7 +1,7 @@
 "use client";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
-import { LayoutDashboard, Radio, MessagesSquare, Bell, ChartNoAxesColumn, CreditCard, Settings, LogOut } from "lucide-react";
+import { LayoutDashboard, Radio, MessagesSquare, Bell, CreditCard, Settings, LogOut } from "lucide-react";
 import Brand from "./brand";
 import { NotificationBell } from "./notifications";
 const links = [
@@ -9,8 +9,7 @@ const links = [
   ["/radars", "Radars", Radio],
   ["/matches", "Matches", MessagesSquare],
   ["/notifications", "Notifications", Bell],
-  ["/usage", "Usage", ChartNoAxesColumn],
-  ["/billing", "Billing", CreditCard],
+  ["/billing", "Credits", CreditCard],
   ["/settings", "Settings", Settings],
 ] as const;
 export default function Shell({ children, email }: { children: React.ReactNode; email: string }) {
