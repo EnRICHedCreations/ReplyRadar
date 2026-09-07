@@ -83,26 +83,32 @@ test("mock is deterministic and intentionally repeats posts; supports failures",
   });
   assert.equal(later.posts[1].externalId, a.posts[0].externalId);
 });
-test("scoring is bounded, explainable, and penalizes age and saturation", async () => {
+test("scoring is bounded, explainable, description-aware, and penalizes age and saturation", async () => {
   const now = new Date(),
-    p = (await new MockProvider().search({ query: "deployment", now }))
-      .posts[0],
-    fresh = scorePost(p, now),
+    description = "Developers struggling to deploy or host an application in production",
+    p = (await new MockProvider().search({ query: "deployment", now })).posts[0],
+    fresh = scorePost(p, description, now),
     old = scorePost(
       {
         ...p,
         createdAt: new Date(+now - 86400000),
         metrics: { ...p.metrics, replies: 500 },
       },
+      description,
       now,
     );
+
   assert.ok(fresh.score > old.score);
   assert.ok(fresh.score >= 0 && fresh.score <= 100);
-  assert.equal(
-    fresh.score,
-    Object.values(fresh.components).reduce((a, b) => a + b, 0),
-  );
   assert.equal(fresh.intent, "BUYING_INTENT");
+  assert.ok(fresh.components.description_fit >= 0 && fresh.components.description_fit <= 40);
+  assert.ok(Array.isArray(fresh.components.description_terms_matched));
+  assert.ok(fresh.components.description_coverage >= 0 && fresh.components.description_coverage <= 1);
+
+  const numericTotal = Object.entries(fresh.components)
+    .filter(([key, value]) => key !== "description_coverage" && typeof value === "number")
+    .reduce((sum, [, value]) => sum + Number(value), 0);
+  assert.equal(fresh.score, Math.min(100, numericTotal));
 });
 test("X normalization keeps provider fields out of domain", () => {
   const p = normalizeX(
